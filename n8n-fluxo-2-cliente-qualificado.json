@@ -1,0 +1,162 @@
+{
+  "name": "ELLO - Aviso Cliente Qualificado",
+  "nodes": [
+    {
+      "id": "02d78b38-348e-41b7-ab3c-15a81570da0e",
+      "name": "Email_Trigger",
+      "type": "n8n-nodes-base.emailTrigger",
+      "typeVersion": 2,
+      "position": [
+        240,
+        40
+      ],
+      "parameters": {
+        "host": "imap.seu-servidor.com",
+        "port": 993,
+        "user": "voce@email.com",
+        "password": "SUA_SENHA_DE_APP",
+        "format": "resolved",
+        "allowUnauthorizedCerts": true
+      }
+    },
+    {
+      "id": "c08233a6-1dd7-4adc-844e-5392918048b8",
+      "name": "1_Limpar_Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const from = $json.from ? ($json.from.text || JSON.stringify($json.from)) : \"desconhecido\";\nconst subject = $json.subject || \"\";\nlet body = \"\";\nif ($json.text) body = $json.text;\nelse if ($json.html) body = (\"\"+$json.html).replace(/<[^>]+>/g,\" \");\nelse body = JSON.stringify($json).slice(0,1500);\nbody = body.replace(/\\s+/g,\" \").slice(0, 2500);\nreturn [{ json: { de: from, assunto: subject, corpo: body }}];"
+      }
+    },
+    {
+      "id": "e77ed2cd-4881-48ac-a9ac-287f50583997",
+      "name": "2_IA_Classificar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer SUA_GROQ_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "model": "llama-3.1-8b-instant",
+          "temperature": 0.2,
+          "response_format": {
+            "type": "json_object"
+          },
+          "messages": [
+            {
+              "role": "user",
+              "content": "Classifique a resposta de email de prospeccao. Responda SOMENTE JSON: {\"qualificado\":true/false, \"categoria\":\"interessado|duvida|negativo|outro\", \"resumo\":\"uma frase\"}. Email de: {{$json.de}}. Assunto: {{$json.assunto}}. Corpo: {{$json.corpo}}. qualificado=true apenas se demonstrar interesse real em economia de energia ou pedir proposta/contato."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2de8e940-0a5f-4d8d-be78-121a6454d59f",
+      "name": "3_Parse_Filtra_Qualificado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const prev = $(\"1_Limpar_Resposta\").item(0).json;\nconst out = [];\ntry {\n  const d = JSON.parse($json.choices[0].message.content);\n  if (d.qualificado === true) {\n    const txt = \"CLIENTE QUALIFICADO!\\nDe: \" + prev.de + \"\\nAssunto: \" + prev.assunto + \"\\nCategoria: \" + (d.categoria||\"\") + \"\\nResumo: \" + (d.resumo||\"\") + \"\\n\\nCorpo: \" + prev.corpo.slice(0,500);\n    out.push({ json: { texto: txt }});\n  }\n} catch(e){}\nreturn out;"
+      }
+    },
+    {
+      "id": "429e5795-fa1c-46a8-8353-974f5a56d6ee",
+      "name": "4_Telegram_Aviso",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botSEU_TELEGRAM_BOT_TOKEN/sendMessage",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "chat_id": "SEU_TELEGRAM_CHAT_ID",
+          "text": "{{ $json.texto }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Email_Trigger": {
+      "main": [
+        [
+          "1_Limpar_Resposta"
+        ]
+      ]
+    },
+    "1_Limpar_Resposta": {
+      "main": [
+        [
+          "2_IA_Classificar"
+        ]
+      ]
+    },
+    "2_IA_Classificar": {
+      "main": [
+        [
+          "3_Parse_Filtra_Qualificado"
+        ]
+      ]
+    },
+    "3_Parse_Filtra_Qualificado": {
+      "main": [
+        [
+          "4_Telegram_Aviso"
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "60322ac7-4e77-4448-889d-009b806ae626",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

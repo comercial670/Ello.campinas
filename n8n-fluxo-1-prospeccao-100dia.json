@@ -1,0 +1,568 @@
+{
+  "name": "ELLO - Prospeccao 100 por dia",
+  "nodes": [
+    {
+      "id": "17e38fa7-25b3-4e28-a426-c21bbcbcf485",
+      "name": "Schedule_Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        40
+      ],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "hour": 9,
+              "minute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ae8c9d13-7447-409e-8fc3-bc46da65a70d",
+      "name": "0_CONFIG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        180
+      ],
+      "parameters": {
+        "jsCode": "// ===== CONFIG - EDITE AQUI (todas as chaves em um so lugar) =====\nreturn [{ json: { config: {\n  google_places_key: \"SUA_GOOGLE_PLACES_API_KEY\",\n  groq_key: \"SUA_GROQ_API_KEY\",\n  brevo_key: \"SUA_BREVO_API_KEY\",\n  airtable_pat: \"SUA_AIRTABLE_PERSONAL_ACCESS_TOKEN\",\n  airtable_base_id: \"SUA_AIRTABLE_BASE_ID\",\n  airtable_table_id: \"SUA_AIRTABLE_TABLE_ID\",\n  telegram_bot_token: \"SEU_TELEGRAM_BOT_TOKEN\",\n  telegram_chat_id: \"SEU_TELEGRAM_CHAT_ID\",\n  sender_name: \"ELLO Energia\",\n  sender_email: \"voce@ello.com.br\",\n  search_query: \"academias em Campinas\"\n}}}]"
+      }
+    },
+    {
+      "id": "e60a4a9b-fc1f-47a7-9e80-dab4fb2db837",
+      "name": "1_Buscar_Places",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/textsearch/json?query={{ encodeURIComponent($json.config.search_query) }}&key={{ $json.config.google_places_key }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "cd13bd6b-abb1-45f3-b161-cce41ff69245",
+      "name": "2_Separar_Resultados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $json.config;\nconst results = $json.results || [];\nreturn results.slice(0, 60).map(r => ({ json: { place_id: r.place_id, name: r.name, config: cfg }}));"
+      }
+    },
+    {
+      "id": "d64a50b4-394e-4601-95fa-e8aa6ab372e6",
+      "name": "3_Place_Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        600
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/details/json?place_id={{ $json.place_id }}&fields=name,formatted_phone_number,website,formatted_address,types&key={{ $json.config.google_places_key }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "e36598c4-ebb9-4754-adbb-8b461fab0d68",
+      "name": "4_Filtrar_Com_Site",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        740
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $(\"0_CONFIG\").first().json.config;\nconst src = $(\"2_Separar_Resultados\");\nreturn $input.all().map((item, i) => {\n  const r = item.json.result || {};\n  return { json: { name: r.name || src.item(i).json.name, phone: r.formatted_phone_number || \"\", website: r.website || \"\", address: r.formatted_address || \"\", config: cfg }};\n}).filter(i => i.json.website && i.json.website.startsWith(\"http\"));"
+      }
+    },
+    {
+      "id": "461e0212-89d8-4cca-8a71-17359f97ce81",
+      "name": "5_Baixar_Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        880
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $json.website }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "931f5f70-40f1-4de8-b0b3-db9eeb31226a",
+      "name": "5b_Limpar_HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        1020
+      ],
+      "parameters": {
+        "jsCode": "function stripHtml(h){ return (h||\"\").replace(/<script[\\s\\S]*?<\\/script>/gi,\" \").replace(/<style[\\s\\S]*?<\\/style>/gi,\" \").replace(/<[^>]+>/g,\" \").replace(/\\s+/g,\" \").trim(); }\nconst cfg = $(\"0_CONFIG\").first().json.config;\nreturn $input.all().map((item,i) => {\n  const prev = $(\"4_Filtrar_Com_Site\").item(i).json;\n  const html = typeof item.json === \"string\" ? item.json : JSON.stringify(item.json);\n  return { json: { ...prev, snippet: stripHtml(html).slice(0, 5000), config: cfg }};\n});"
+      }
+    },
+    {
+      "id": "53cefde1-7580-423b-8499-b7abdf615ab1",
+      "name": "6_IA_Extrair_Qualificar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        1160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $json.config.groq_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "model": "llama-3.1-8b-instant",
+          "temperature": 0.2,
+          "response_format": {
+            "type": "json_object"
+          },
+          "messages": [
+            {
+              "role": "user",
+              "content": "Voce e um assistente que analisa dados de empresa. Responda SOMENTE JSON. Dados: nome={{$json.name}}, site snippet={{$json.snippet}}. Retorne: {\"email\":\"contato@empresa.com ou vazio\",\"score\":0-10 (quao bom cliente de energia compartilhada, porte/ramo),\"ramo\":\"breve\"}."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8f73bb90-78b9-4a1d-8e36-457b6846ca9b",
+      "name": "7_Parse_Qualificados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        1300
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $(\"0_CONFIG\").first().json.config;\nconst prev = $(\"5b_Limpar_HTML\");\nconst out = [];\n$input.all().forEach((item,i) => {\n  try {\n    const txt = item.json.choices[0].message.content;\n    const d = JSON.parse(txt);\n    if (d.email && d.email.includes(\"@\") && (d.score||0) >= 7) {\n      const p = prev.item(i).json;\n      out.push({ json: { name: p.name, phone: p.phone, website: p.website, ramo: d.ramo||\"\", email: d.email, score: d.score, config: cfg }});\n    }\n  } catch(e) {}\n});\nreturn out;"
+      }
+    },
+    {
+      "id": "d50b88df-df96-474d-9c40-82aae97fc965",
+      "name": "7b_Agregar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        1440
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { total_candidatos: $input.all().length, config: $(\"0_CONFIG\").first().json.config }}];"
+      }
+    },
+    {
+      "id": "f63031c8-3c25-417c-b8db-fee2115801ff",
+      "name": "8_Airtable_Ler_Hoje",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        1580
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.airtable.com/v0/{{ $json.config.airtable_base_id }}/{{ $json.config.airtable_table_id }}?filterByFormula=IS_SAME(%7BData%7D%2CTODAY())&pageSize=100",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $json.config.airtable_pat }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "198cd26b-d649-4e26-b401-8724001b9647",
+      "name": "9_Dedupe_Limite_100dia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        1720
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $(\"0_CONFIG\").first().json.config;\nconst candidatos = $(\"7_Parse_Qualificados\").all().map(i => i.json);\nconst enviadosHoje = ($json.records || []).map(r => (r.fields.Email||\"\").toLowerCase().trim());\nconst restante = Math.max(0, 100 - enviadosHoje.length);\nconst novos = candidatos.filter(c => !enviadosHoje.includes(c.email.toLowerCase().trim())).slice(0, restante);\nreturn novos.map(c => ({ json: { ...c, config: cfg }}));"
+      }
+    },
+    {
+      "id": "c13ba7fa-90f9-43a3-8119-a9da91deb02b",
+      "name": "10_IA_Personalizar_Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        1860
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $json.config.groq_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "model": "llama-3.1-8b-instant",
+          "temperature": 0.5,
+          "response_format": {
+            "type": "json_object"
+          },
+          "messages": [
+            {
+              "role": "user",
+              "content": "Escreva email de prospeccao da ELLO (energia solar compartilhada, economia ate 20% na conta de luz, sem obras, 100% digital). Empresa: {{$json.name}}, ramo: {{$json.ramo}}. Tom profissional e curto. Responda SOMENTE JSON: {\"assunto\":\"...\",\"corpo\":\"<p>...</p> com link https://wa.me/5519995621927 e descadastro\"}."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "97c85ff6-6f15-46ee-b351-d1f2604cbff4",
+      "name": "10b_Merge_Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        2000
+      ],
+      "parameters": {
+        "jsCode": "const prev = $(\"9_Dedupe_Limite_100dia\");\nconst out = [];\n$input.all().forEach((item,i) => {\n  try {\n    const d = JSON.parse(item.json.choices[0].message.content);\n    const p = prev.item(i).json;\n    out.push({ json: { ...p, assunto: d.assunto, corpo: d.corpo }});\n  } catch(e){}\n});\nreturn out;"
+      }
+    },
+    {
+      "id": "52bffbfb-c65f-450b-8377-9c7a7a0c4f41",
+      "name": "11_Enviar_Brevo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        2140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "{{ $json.config.brevo_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "sender": {
+            "name": "{{ $json.config.sender_name }}",
+            "email": "{{ $json.config.sender_email }}"
+          },
+          "to": [
+            {
+              "email": "{{ $json.email }}",
+              "name": "{{ $json.name }}"
+            }
+          ],
+          "subject": "{{ $json.assunto }}",
+          "htmlContent": "{{ $json.corpo }}"
+        }
+      }
+    },
+    {
+      "id": "1e2a6caa-d01d-4328-9ca4-e17490affb36",
+      "name": "12_Airtable_Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        2280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.airtable.com/v0/{{ $json.config.airtable_base_id }}/{{ $json.config.airtable_table_id }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $json.config.airtable_pat }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "records": [
+            {
+              "fields": {
+                "Data": "{{ new Date().toISOString().slice(0,10) }}",
+                "Empresa": "{{ $json.name }}",
+                "Email": "{{ $json.email }}",
+                "Telefone": "{{ $json.phone }}",
+                "Cidade": "{{ $json.config.search_query }}",
+                "Status": "Enviado"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cedb59c1-5e09-4168-927f-c21f19371d5c",
+      "name": "13_Resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        2420
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $(\"0_CONFIG\").first().json.config;\nconst enviados = $input.all().length;\nconst pesquisados = $(\"2_Separar_Resultados\").all().length;\nconst qualificados = $(\"7_Parse_Qualificados\").all().length;\nconst txt = \"RELATORIO DIARIO PROSPECCAO ELLO\\nEmpresas pesquisadas: \" + pesquisados + \"\\nQualificadas: \" + qualificados + \"\\nEmails enviados hoje: \" + enviados + \"/100\";\nreturn [{ json: { texto: txt, config: cfg }}];"
+      }
+    },
+    {
+      "id": "2d9406d1-7b28-4751-a7ef-0790b186c320",
+      "name": "14_Telegram_Resumo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        2560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot{{ $json.config.telegram_bot_token }}/sendMessage",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": {
+          "chat_id": "{{ $json.config.telegram_chat_id }}",
+          "text": "{{ $json.texto }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule_Trigger": {
+      "main": [
+        [
+          "0_CONFIG"
+        ]
+      ]
+    },
+    "0_CONFIG": {
+      "main": [
+        [
+          "1_Buscar_Places"
+        ]
+      ]
+    },
+    "1_Buscar_Places": {
+      "main": [
+        [
+          "2_Separar_Resultados"
+        ]
+      ]
+    },
+    "2_Separar_Resultados": {
+      "main": [
+        [
+          "3_Place_Details"
+        ]
+      ]
+    },
+    "3_Place_Details": {
+      "main": [
+        [
+          "4_Filtrar_Com_Site"
+        ]
+      ]
+    },
+    "4_Filtrar_Com_Site": {
+      "main": [
+        [
+          "5_Baixar_Site"
+        ]
+      ]
+    },
+    "5_Baixar_Site": {
+      "main": [
+        [
+          "5b_Limpar_HTML"
+        ]
+      ]
+    },
+    "5b_Limpar_HTML": {
+      "main": [
+        [
+          "6_IA_Extrair_Qualificar"
+        ]
+      ]
+    },
+    "6_IA_Extrair_Qualificar": {
+      "main": [
+        [
+          "7_Parse_Qualificados"
+        ]
+      ]
+    },
+    "7_Parse_Qualificados": {
+      "main": [
+        [
+          "7b_Agregar"
+        ]
+      ]
+    },
+    "7b_Agregar": {
+      "main": [
+        [
+          "8_Airtable_Ler_Hoje"
+        ]
+      ]
+    },
+    "8_Airtable_Ler_Hoje": {
+      "main": [
+        [
+          "9_Dedupe_Limite_100dia"
+        ]
+      ]
+    },
+    "9_Dedupe_Limite_100dia": {
+      "main": [
+        [
+          "10_IA_Personalizar_Email"
+        ]
+      ]
+    },
+    "10_IA_Personalizar_Email": {
+      "main": [
+        [
+          "10b_Merge_Email"
+        ]
+      ]
+    },
+    "10b_Merge_Email": {
+      "main": [
+        [
+          "11_Enviar_Brevo"
+        ]
+      ]
+    },
+    "11_Enviar_Brevo": {
+      "main": [
+        [
+          "12_Airtable_Log"
+        ]
+      ]
+    },
+    "12_Airtable_Log": {
+      "main": [
+        [
+          "13_Resumo"
+        ]
+      ]
+    },
+    "13_Resumo": {
+      "main": [
+        [
+          "14_Telegram_Resumo"
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "c7bc6875-1873-4abb-8fc0-70672a510149",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
